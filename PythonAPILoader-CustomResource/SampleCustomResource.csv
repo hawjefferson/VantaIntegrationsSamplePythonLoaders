@@ -1,0 +1,4 @@
+displayName,uniqueId,externalUrl,key1,key2,key3
+TEST001,TEST001,https://external_system/test001,value1,value2,value3
+TEST002,TEST002,https://external_system/test002,value3,value2,value1
+TEST003,TEST003,https://external_system/test003,value4,value5,value6

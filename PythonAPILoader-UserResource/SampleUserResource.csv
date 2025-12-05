@@ -1,0 +1,2 @@
+uniqueId,externalUrl,fullName,accountName,displayName,email,createdTimestamp,authMethod,mfaMethods,mfaEnabled,status,permissionLevel
+USER001,https://externalidp1.com,John Doe,jdoe,john doe,john.doe@loadtester.com,2025-12-05T02:24:11Z,PASSWORD,"PUSH_PROMPT,SMS",TRUE,ACTIVE,BASE
