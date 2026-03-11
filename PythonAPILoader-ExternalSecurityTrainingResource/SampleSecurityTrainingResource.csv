@@ -1,0 +1,4 @@
+status,displayName,uniqueId,externalUrl,trainingId,trainingName,frameworksFulfilled,traineeFullName,traineeAccountName,traineeEmail,trainingCreatedTimestamp,trainingDueTimestamp,trainingCompletedTimestamp
+COMPLETE,CustomTrainingOne,customtraining_001,https://trainingplatform.com/customtraining_001,custom-training-1,Custom Training One,"[""SOC2"",""ISO27001""]",Jefferson Haw,jhaw,jefferson.haw@vanta.com,02/05/2026 13:30:00,03/05/2026 13:30:00,02/20/2026 13:30:00
+INCOMPLETE,CustomTrainingOne,customtraining_001,https://trainingplatform.com/customtraining_001,custom-training-1,Custom Training One,"[""SOC2"",""ISO27001""]",Daniel Kang,dkang,daniel.kang@vanta.com,02/05/2026 13:30:00,03/05/2026 13:30:00,
+COMPLETE,CustomTrainingOne,customtraining_001,https://trainingplatform.com/customtraining_001,custom-training-1,Custom Training One,"[""SOC2"",""ISO27001""]",Ryan Noon,rnoon,ryan.noon@vanta.com,02/05/2026 13:30:00,03/05/2026 13:30:00,02/20/2026 13:30:00
