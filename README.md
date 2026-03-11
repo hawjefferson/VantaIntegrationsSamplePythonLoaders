@@ -19,3 +19,8 @@ Vulnerability Component Resource
 
 
 python3 VulnerabilityLoader.py VulnerabilityResource.csv https://api.vanta.com/v1/resources/vulnerable_component --auth-token <token> --resource-id <vuln_compoent_resource_id>
+
+External Training Resource
+
+python3 SecurityTrainingLoader.py SampleSecurityTrainingResource.csv https://api.vanta.com/v1/resources/user_security_training_status --auth-token <token> --resource-id <training_resource_id>
+
