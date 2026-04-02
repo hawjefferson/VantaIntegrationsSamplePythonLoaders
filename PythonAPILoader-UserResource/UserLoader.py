@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Read a CSV file and send each row as a JSON body via PUT to an API endpoint.
+Read a CSV file and send all rows as a single bulk JSON body via PUT to an API endpoint.
 
-Each row produces a payload like:
+The request payload looks like:
 
 {
   "resources": [
@@ -19,6 +19,15 @@ Each row produces a payload like:
       "accountName": "jdoe",
       "email": "john.doe@test.com",
       "createdTimestamp": "2025-12-05T02:24:11Z"
+    },
+    {
+      "permissionLevel": "BASE",
+      "status": "ACTIVE",
+      "mfaEnabled": false,
+      "mfaMethods": ["SMS"],
+      "authMethod": "SSO",
+      "displayName": "Jane",
+      "uniqueId": "Smith"
     }
   ],
   "resourceId": "69325a67306d8b286ddc41c1"
@@ -32,13 +41,13 @@ import requests
 from typing import Dict, Any, List, Optional
 
 
-def send_row_put(
+def send_bulk_put(
     url: str,
     payload: Dict[str, Any],
     headers: Dict[str, str],
     timeout: int = 10,
 ) -> requests.Response:
-    """Send a single payload as JSON via PUT."""
+    """Send the bulk payload as JSON via PUT."""
     response = requests.put(url, json=payload, headers=headers, timeout=timeout)
     return response
 
@@ -56,13 +65,11 @@ def coerce_value(value: Any) -> Any:
 
     v = value.strip()
 
-    # Booleans
     if v.lower() == "true":
         return True
     if v.lower() == "false":
         return False
 
-    # Try JSON (for arrays/objects, e.g. ["PUSH_PROMPT"])
     if (v.startswith("[") and v.endswith("]")) or (v.startswith("{") and v.endswith("}")):
         try:
             return json.loads(v)
@@ -117,7 +124,6 @@ def parse_mfa_methods(raw_value: Any) -> Optional[List[str]]:
     if not v:
         return None
 
-    # Try JSON array first
     if v.startswith("[") and v.endswith("]"):
         try:
             parsed = json.loads(v)
@@ -126,44 +132,22 @@ def parse_mfa_methods(raw_value: Any) -> Optional[List[str]]:
         except json.JSONDecodeError:
             pass
 
-    # Fall back to comma-separated list or single value
     if "," in v:
         return [part.strip() for part in v.split(",") if part.strip()]
 
-    # Single value
     return [v]
 
 
-def build_payload(
+def build_resource_object(
     csv_row: Dict[str, Any],
     headers: List[str],
-    resource_id_override: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """
-    Build the JSON body to send for each request:
-
-    {
-      "resources": [ { ...fields from CSV... } ],
-      "resourceId": "<from CLI or CSV>"
-    }
-
-    Special handling:
-      - resourceId: from --resource-id or CSV 'resourceId'
-      - mfaMethods: always an array
-      - mfaEnabled: always a boolean
-    """
-    # Decide resourceId
-    resource_id = resource_id_override or csv_row.get("resourceId")
-    if not resource_id:
-        raise ValueError(
-            "resourceId is missing: provide --resource-id or a 'resourceId' column in the CSV."
-        )
-
+    """Build a single resource object from one CSV row."""
     resource_obj: Dict[str, Any] = {}
 
     for h in headers:
         if h == "resourceId":
-            continue  # handled separately
+            continue
 
         raw_value = csv_row.get(h)
         if raw_value in (None, ""):
@@ -183,15 +167,58 @@ def build_payload(
 
         resource_obj[h] = coerce_value(raw_value)
 
+    return resource_obj
+
+
+def build_bulk_payload(
+    csv_rows: List[Dict[str, Any]],
+    headers: List[str],
+    resource_id_override: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Build one bulk JSON body for a single request:
+
+    {
+      "resources": [{...}, {...}, ...],
+      "resourceId": "<from CLI or CSV>"
+    }
+
+    Special handling:
+      - resourceId: from --resource-id or CSV 'resourceId'
+      - mfaMethods: always an array
+      - mfaEnabled: always a boolean
+    """
+    if not csv_rows:
+        raise ValueError("CSV file contains no data rows.")
+
+    resource_id = resource_id_override or csv_rows[0].get("resourceId")
+    if not resource_id:
+        raise ValueError(
+            "resourceId is missing: provide --resource-id or a 'resourceId' column in the CSV."
+        )
+
+    resources: List[Dict[str, Any]] = []
+
+    for idx, row in enumerate(csv_rows, start=1):
+        row_resource_id = row.get("resourceId")
+        effective_resource_id = resource_id_override or row_resource_id
+        if effective_resource_id != resource_id:
+            raise ValueError(
+                f"Row #{idx} has resourceId {row_resource_id!r}, which does not match "
+                f"the bulk request resourceId {resource_id!r}."
+            )
+
+        resources.append(build_resource_object(row, headers))
+
     return {
-        "resources": [resource_obj],
+        "resources": resources,
         "resourceId": resource_id,
     }
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Read a CSV file and send each row via PUT to an API endpoint."
+        description="Read a CSV file and send all rows in one bulk PUT request to an API endpoint."
     )
     parser.add_argument("csv_path", help="Path to the input CSV file")
     parser.add_argument("api_url", help="API endpoint URL to send PUT requests to")
@@ -204,7 +231,7 @@ def main():
         "--id-column",
         help=(
             "Optional: column name to append to the URL as /<value> "
-            "(e.g. api_url/<id>)"
+            "(e.g. api_url/<id>). For bulk mode, all rows must have the same value."
         ),
     )
     parser.add_argument(
@@ -212,7 +239,7 @@ def main():
         help=(
             "Optional: static resourceId to use in the payload. "
             "If not provided, the script will look for a 'resourceId' column "
-            "in the CSV."
+            "in the CSV. In bulk mode, all rows must resolve to the same resourceId."
         ),
     )
     parser.add_argument(
@@ -224,17 +251,15 @@ def main():
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="Print what would be sent instead of making requests",
+        help="Print what would be sent instead of making the request",
     )
 
     args = parser.parse_args()
 
-    # Base headers
     headers = {"Content-Type": "application/json"}
     if args.auth_token:
         headers["Authorization"] = f"Bearer {args.auth_token}"
 
-    # Open and read CSV
     with open(args.csv_path, newline="", encoding="utf-8") as f:
         reader = csv.DictReader(f)
 
@@ -244,52 +269,73 @@ def main():
         csv_headers = [h.strip() for h in reader.fieldnames if h is not None]
         print(f"Fields detected in CSV: {csv_headers}")
 
-        for i, row in enumerate(reader, start=1):
-            # Build URL (optionally with /<id> at the end)
-            url = args.api_url
-            if args.id_column:
-                if args.id_column not in row:
-                    raise KeyError(
-                        f"Configured id-column '{args.id_column}' not found in CSV "
-                        f"columns: {csv_headers}"
+        cleaned_rows: List[Dict[str, Any]] = []
+        for row in reader:
+            cleaned_rows.append(
+                {
+                    (k.strip() if isinstance(k, str) else k): (
+                        v.strip() if isinstance(v, str) else v
                     )
-                url = f"{args.api_url.rstrip('/')}/{row[args.id_column]}"
-
-            # Clean CSV row: strip whitespace from keys & values
-            cleaned_row = {
-                (k.strip() if isinstance(k, str) else k): (
-                    v.strip() if isinstance(v, str) else v
-                )
-                for k, v in row.items()
-            }
-
-            # Build final payload using your JSON template shape
-            payload = build_payload(
-                cleaned_row,
-                csv_headers,
-                resource_id_override=args.resource_id,
+                    for k, v in row.items()
+                }
             )
 
-            if args.dry_run:
-                print(f"\n[DRY RUN] Row #{i}")
-                print(f"PUT {url}")
-                print("Payload:")
-                print(json.dumps(payload, indent=2, ensure_ascii=False))
-                continue
+    if not cleaned_rows:
+        raise ValueError("CSV file contains no data rows.")
 
-            try:
-                resp = send_row_put(url, payload, headers, timeout=args.timeout)
-            except requests.RequestException as e:
-                print(f"[ERROR] Row #{i}: request failed: {e}")
-                continue
+    url = args.api_url
+    if args.id_column:
+        if args.id_column not in csv_headers:
+            raise KeyError(
+                f"Configured id-column '{args.id_column}' not found in CSV columns: {csv_headers}"
+            )
 
-            if 200 <= resp.status_code < 300:
-                print(f"[OK] Row #{i} -> {url} (status {resp.status_code})")
-            else:
-                print(
-                    f"[FAIL] Row #{i} -> {url} (status {resp.status_code}) "
-                    f"Response: {resp.text[:500]}"
+        id_values = []
+        for idx, row in enumerate(cleaned_rows, start=1):
+            row_id_value = row.get(args.id_column)
+            if row_id_value in (None, ""):
+                raise ValueError(
+                    f"Row #{idx} is missing id-column '{args.id_column}' required for bulk URL construction."
                 )
+            id_values.append(row_id_value)
+
+        unique_id_values = list(dict.fromkeys(id_values))
+        if len(unique_id_values) != 1:
+            raise ValueError(
+                f"Bulk mode requires exactly one unique '{args.id_column}' value, but found: {unique_id_values}"
+            )
+
+        url = f"{args.api_url.rstrip('/')}/{unique_id_values[0]}"
+
+    payload = build_bulk_payload(
+        cleaned_rows,
+        csv_headers,
+        resource_id_override=args.resource_id,
+    )
+
+    if args.dry_run:
+        print("\n[DRY RUN] Bulk request")
+        print(f"PUT {url}")
+        print("Payload:")
+        print(json.dumps(payload, indent=2, ensure_ascii=False))
+        return
+
+    try:
+        resp = send_bulk_put(url, payload, headers, timeout=args.timeout)
+    except requests.RequestException as e:
+        print(f"[ERROR] Bulk request failed: {e}")
+        return
+
+    if 200 <= resp.status_code < 300:
+        print(
+            f"[OK] Bulk request sent to {url} "
+            f"with {len(payload['resources'])} resources (status {resp.status_code})"
+        )
+    else:
+        print(
+            f"[FAIL] Bulk request to {url} (status {resp.status_code}) "
+            f"Response: {resp.text[:500]}"
+        )
 
 
 if __name__ == "__main__":
